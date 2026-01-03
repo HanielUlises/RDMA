@@ -1,0 +1,41 @@
+*.o
+*.dwo
+*.su
+
+# From CMake.gitignore
+CMakeCache.txt
+CMakeFiles
+CMakeScripts
+Testing
+Makefile
+cmake_install.cmake
+install_manifest.txt
+CTestTestfile.cmake
+DartConfiguration.tcl
+
+# Build directories
+build/
+Build/
+BUILD/
+
+# Generated files
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Editor/temp files (optional but common)
+*~
+.*.swp
+.DS_Store
+
+# Other common ignores for C/RDMA projects
+/core
+/tags
+/cscope.*
+/config.log
+/config.status
+/autom4te.cache/
+/aclocal.m4
+/configure
