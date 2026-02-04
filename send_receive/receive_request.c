@@ -54,7 +54,7 @@ int main() {
     qp_init_attr.qp_type = IBV_QPT_RC;
     qp_init_attr.cap.max_send_wr = 16;
     qp_init_attr.cap.max_recv_wr = 16;
-    qp_init_attr.cap.max_sg_sge = 1;
+    qp_init_attr.cap.max_recv_sge = 1;
     qp_init_attr.cap.max_send_sge = 1;
 
     struct ibv_qp *qp = ibv_create_qp(pd, &qp_init_attr);
@@ -106,11 +106,11 @@ int main() {
     memset(&attr, 0, sizeof(attr));
     attr.qp_state = IBV_QPS_RTS;
     attr.timeout = 14;
-    attr.retry_count = 7;
+    attr.retry_cnt = 7;
     attr.rnr_retry = 7;
     attr.sq_psn = 0;
     attr.max_rd_atomic = 1;
-    flags = IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_COUNT |
+    flags = IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT |
             IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN | IBV_QP_MAX_QP_RD_ATOMIC;
     if (ibv_modify_qp(qp, &attr, flags)) {
         perror("ibv_modify_qp to RTS");
