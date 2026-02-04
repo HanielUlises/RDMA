@@ -28,10 +28,16 @@ int main() {
     }
 
     char send_buffer[] = "Hello, RDMA World!";
+    struct ibv_mr *mr_send = ibv_reg_mr(pd, send_buffer, sizeof(send_buffer), 0);
+    if (!mr_send) {
+        perror("ibv_reg_mr send");
+        exit(1);
+    }
 
-    struct ibv_mr *mr = ibv_reg_mr(pd, send_buffer, sizeof(send_buffer), IBV_ACCESS_LOCAL_WRITE);
-    if (!mr) {
-        perror("ibv_reg_mr");
+    char recv_buffer[sizeof(send_buffer)] = {0};
+    struct ibv_mr *mr_recv = ibv_reg_mr(pd, recv_buffer, sizeof(recv_buffer), IBV_ACCESS_LOCAL_WRITE);
+    if (!mr_recv) {
+        perror("ibv_reg_mr recv");
         exit(1);
     }
 
@@ -48,7 +54,7 @@ int main() {
     qp_init_attr.qp_type = IBV_QPT_RC;
     qp_init_attr.cap.max_send_wr = 16;
     qp_init_attr.cap.max_recv_wr = 16;
-    qp_init_attr.cap.max_sg_sge = 1;
+    qp_init_attr.cap.max_recv_sge = 1;
     qp_init_attr.cap.max_send_sge = 1;
 
     struct ibv_qp *qp = ibv_create_qp(pd, &qp_init_attr);
@@ -57,8 +63,14 @@ int main() {
         exit(1);
     }
 
+    uint32_t local_qpn = qp->qp_num;
+
     struct ibv_port_attr port_attr;
-    ibv_query_port(ctx, 1, &port_attr);
+    if (ibv_query_port(ctx, 1, &port_attr)) {
+        perror("ibv_query_port");
+        exit(1);
+    }
+    uint16_t local_lid = port_attr.lid;
 
     struct ibv_qp_attr attr;
     memset(&attr, 0, sizeof(attr));
@@ -75,12 +87,12 @@ int main() {
     memset(&attr, 0, sizeof(attr));
     attr.qp_state = IBV_QPS_RTR;
     attr.path_mtu = IBV_MTU_1024;
-    attr.dest_qp_num = 0;
+    attr.dest_qp_num = local_qpn;
     attr.rq_psn = 0;
     attr.max_dest_rd_atomic = 1;
     attr.min_rnr_timer = 12;
     attr.ah_attr.is_global = 0;
-    attr.ah_attr.dlid = port_attr.lid;
+    attr.ah_attr.dlid = local_lid;
     attr.ah_attr.sl = 0;
     attr.ah_attr.src_path_bits = 0;
     attr.ah_attr.port_num = 1;
@@ -94,41 +106,61 @@ int main() {
     memset(&attr, 0, sizeof(attr));
     attr.qp_state = IBV_QPS_RTS;
     attr.timeout = 14;
-    attr.retry_count = 7;
+    attr.retry_cnt = 7;
     attr.rnr_retry = 7;
     attr.sq_psn = 0;
     attr.max_rd_atomic = 1;
-    flags = IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_COUNT |
+    flags = IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT |
             IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN | IBV_QP_MAX_QP_RD_ATOMIC;
     if (ibv_modify_qp(qp, &attr, flags)) {
         perror("ibv_modify_qp to RTS");
         exit(1);
     }
 
-    struct ibv_sge sge;
-    sge.addr = (uintptr_t)send_buffer;
-    sge.length = sizeof(send_buffer);
-    sge.lkey = mr->lkey;
+    struct ibv_sge sge_recv;
+    sge_recv.addr = (uintptr_t)recv_buffer;
+    sge_recv.length = sizeof(recv_buffer);
+    sge_recv.lkey = mr_recv->lkey;
 
-    struct ibv_send_wr wr;
-    struct ibv_send_wr *bad_wr;
-    memset(&wr, 0, sizeof(wr));
-    wr.wr_id = 1;
-    wr.next = NULL;
-    wr.sg_list = &sge;
-    wr.num_sge = 1;
-    wr.opcode = IBV_WR_SEND;
-    wr.send_flags = IBV_SEND_SIGNALED;
+    struct ibv_recv_wr wr_recv;
+    struct ibv_recv_wr *bad_wr_recv;
+    memset(&wr_recv, 0, sizeof(wr_recv));
+    wr_recv.wr_id = 2;
+    wr_recv.next = NULL;
+    wr_recv.sg_list = &sge_recv;
+    wr_recv.num_sge = 1;
 
-    int ret = ibv_post_send(qp, &wr, &bad_wr);
+    int ret = ibv_post_recv(qp, &wr_recv, &bad_wr_recv);
+    if (ret) {
+        perror("ibv_post_recv failed");
+        exit(1);
+    }
+
+    struct ibv_sge sge_send;
+    sge_send.addr = (uintptr_t)send_buffer;
+    sge_send.length = sizeof(send_buffer);
+    sge_send.lkey = mr_send->lkey;
+
+    struct ibv_send_wr wr_send;
+    struct ibv_send_wr *bad_wr_send;
+    memset(&wr_send, 0, sizeof(wr_send));
+    wr_send.wr_id = 1;
+    wr_send.next = NULL;
+    wr_send.sg_list = &sge_send;
+    wr_send.num_sge = 1;
+    wr_send.opcode = IBV_WR_SEND;
+    wr_send.send_flags = IBV_SEND_SIGNALED;
+
+    ret = ibv_post_send(qp, &wr_send, &bad_wr_send);
     if (ret) {
         perror("ibv_post_send failed");
         exit(1);
     }
 
     struct ibv_wc wc;
-    int done = 0;
-    while (!done) {
+    int done_send = 0;
+    int done_recv = 0;
+    while (!done_send || !done_recv) {
         int num_comp = ibv_poll_cq(cq, 1, &wc);
         if (num_comp > 0) {
             if (wc.status != IBV_WC_SUCCESS) {
@@ -138,16 +170,23 @@ int main() {
                        (int)wc.wr_id);
                 exit(1);
             }
-            printf("Completion for wr_id %d\n", (int)wc.wr_id);
-            done = 1;
+            if (wc.opcode == IBV_WC_SEND) {
+                printf("Send completion for wr_id %d\n", (int)wc.wr_id);
+                done_send = 1;
+            } else if (wc.opcode == IBV_WC_RECV) {
+                printf("Recv completion for wr_id %d\n", (int)wc.wr_id);
+                printf("Received: %s\n", recv_buffer);
+                done_recv = 1;
+            }
         }
     }
 
-    printf("RDMA Send request posted and completed successfully.\n");
+    printf("RDMA Send and Receive completed successfully.\n");
 
     ibv_destroy_qp(qp);
     ibv_destroy_cq(cq);
-    ibv_dereg_mr(mr);
+    ibv_dereg_mr(mr_recv);
+    ibv_dereg_mr(mr_send);
     ibv_dealloc_pd(pd);
     ibv_close_device(ctx);
 
